@@ -656,6 +656,8 @@ private:
             std::string response = QueryXiangLaoHuiHealthData(mobile_phone);
             
             // 添加调试信息
+            // print response
+            ESP_LOGI("XiangLaoHui", "Response: %s", response.c_str());  
             ESP_LOGI("XiangLaoHui", "Response length: %d", response.length());
             ESP_LOGI("XiangLaoHui", "Response first 100 chars: %.100s", response.c_str());
             
