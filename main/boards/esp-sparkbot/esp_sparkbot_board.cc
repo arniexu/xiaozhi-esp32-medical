@@ -682,9 +682,9 @@ private:
             
             if (cJSON_IsString(serial_number) && cJSON_IsString(mobile_phone_resp)) {
                 // 成功获取健康数据，构建友好的摘要
-                std::string health_summary = "🏥 健康数据查询成功!\n\n";
-                health_summary += "📱 手机号: " + std::string(mobile_phone_resp->valuestring) + "\n";
-                health_summary += "📋 流水号: " + std::string(serial_number->valuestring) + "\n\n";
+                std::string health_summary = "健康数据查询成功!\n\n";
+                health_summary += "手机号: " + std::string(mobile_phone_resp->valuestring) + "\n";
+                health_summary += "流水号: " + std::string(serial_number->valuestring) + "\n\n";
                 
                 // 解析各项健康数据
                 cJSON* heart_rate = cJSON_GetObjectItem(json, "heart_rate");
