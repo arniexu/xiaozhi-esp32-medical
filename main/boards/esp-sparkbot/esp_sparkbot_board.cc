@@ -10,12 +10,26 @@
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
+#include <esp_spiffs.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <driver/uart.h>
 #include <cstring>
 
 #include "esp32_camera.h"
+#include "mbedtls/md.h"
+#include <random>
+#include <iomanip>
+#include <chrono>
+// 在现有的 #include 列表中添加以下头文件：
+
+#include "esp_http_client.h"  // 添加这个头文件
+#include "cJSON.h"            // 如果还没有的话也需要添加
+#include "esp_crt_bundle.h"   // ESP32证书包
+#include <sstream>            // 用于 std::stringstream
+#include <set>                // 用于 std::set
+// Add a simple base64_encode function declaration if not provided by any header
+std::string base64_encode(const uint8_t* data, size_t len);
 
 #define TAG "esp_sparkbot"
 
@@ -66,6 +80,97 @@ private:
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
 
+    void MountStorage() {
+        ESP_LOGI(TAG, "=== Mounting Storage Partition ===");
+        
+        // Mount the storage partition
+        esp_vfs_spiffs_conf_t conf = {
+            .base_path = "/storage",
+            .partition_label = "storage",
+            .max_files = 5,
+            .format_if_mount_failed = true,
+        };
+        
+        ESP_LOGI(TAG, "Attempting to mount SPIFFS partition 'storage' at '/storage'");
+        esp_err_t ret = esp_vfs_spiffs_register(&conf);
+        if (ret != ESP_OK) {
+            if (ret == ESP_FAIL) {
+                ESP_LOGE(TAG, "❌ Failed to mount or format filesystem");
+            } else if (ret == ESP_ERR_NOT_FOUND) {
+                ESP_LOGE(TAG, "❌ Failed to find SPIFFS partition 'storage' - check partition table");
+            } else {
+                ESP_LOGE(TAG, "❌ Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+            }
+            return;
+        }
+        
+        ESP_LOGI(TAG, "✅ SPIFFS mounted successfully");
+        
+        size_t total = 0, used = 0;
+        ret = esp_spiffs_info("storage", &total, &used);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "❌ Failed to get SPIFFS partition information (%s)", esp_err_to_name(ret));
+        } else {
+            ESP_LOGI(TAG, "📊 Storage partition size: total: %d KB, used: %d KB", total / 1024, used / 1024);
+        }
+        
+        // Test write access
+        FILE* test_file = fopen("/storage/test.txt", "w");
+        if (test_file) {
+            fprintf(test_file, "test");
+            fclose(test_file);
+            remove("/storage/test.txt");
+            ESP_LOGI(TAG, "✅ Storage write test successful");
+        } else {
+            ESP_LOGE(TAG, "❌ Storage write test failed");
+        }
+    }
+    // // 初始化红外传感器GPIO35
+    // void initializeIRSensor() {
+    //     // 配置 GPIO35 为输入模式
+    //     gpio_config_t io_conf = {};
+    //     io_conf.intr_type = GPIO_INTR_DISABLE;
+    //     io_conf.mode = GPIO_MODE_INPUT;
+    //     io_conf.pin_bit_mask = (1ULL << 35);
+    //     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    //     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    //     gpio_config(&io_conf);
+
+    //     // 任务1 使用红外传感器主动触发小智使其进入激活状态，播放提示音，进行人脸识别，主动向用户打招呼
+    //     // 任务1 步骤1 创建定时器，周期性轮询红外传感器状态
+    //     const esp_timer_create_args_t timer_args = {
+    //         .callback = [](void* arg) {
+    //             auto& app = Application::GetInstance();
+    //             int ir_state = gpio_get_level((gpio_num_t)38);
+    //             // 如果当前设备已经被激活，则不处理红外传感器事件
+    //             if (app.GetDeviceState() == kDeviceStateActivating) {
+    //                 return;
+    //             }
+    //             ESP_LOGI(TAG, "IR Sensor(GPIO38) state: %d", ir_state);
+    //             // 可在此处添加进一步处理逻辑
+    //             if (ir_state == 0) {
+    //                  // 发送wake up word detected事件
+    //                 ESP_LOGI(TAG, "IR Sensor triggered - Simulating Wake Word Detected");   
+    //                 app.SimulateWakeWordDetected();
+    //             }
+    //             else {
+    //                 ESP_LOGI(TAG, "IR Sensor not triggered");
+    //                 // 没有action，不使用红外决定是否退出activating模式
+    //             }
+    //         },
+    //         .arg = nullptr,
+    //         .name = "ir_sensor_poll"
+    //     };
+    //     esp_timer_handle_t timer_handle;
+    //     // 获取 Application 实例并作为 arg 传递
+    //     auto& app = Application::GetInstance();
+    //     esp_timer_create_args_t timer_args_with_arg = timer_args;
+    //     timer_args_with_arg.arg = &app;
+    //     esp_timer_create(&timer_args_with_arg, &timer_handle);
+    //     // 每500ms轮询一次
+    //     esp_timer_start_periodic(timer_handle, 500 * 1000);
+    // }
+    
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_GPIO;
@@ -192,41 +297,451 @@ private:
         ESP_LOGI(TAG, "Sent command: %s", command_str);
     }
 
+    // 享老汇API配置
+    #define XIANGLAO_API_URL "https://sign.upcif.com/xlh-api/senior/queryhealthdata"
+    #define XIANGLAO_DOMAIN "sign.upcif.com"
+
+    // 生成流水号：YYYYMMDDHHMISS + 5位随机数
+    std::string GenerateSerialNumber() {
+        auto now = std::chrono::system_clock::now();
+        auto time_t = std::chrono::system_clock::to_time_t(now);
+        
+        // 使用 gmtime 确保使用 UTC 时间，与服务器保持一致
+        auto tm = *std::gmtime(&time_t);
+        
+        // 生成5位随机数
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(10000, 99999);
+        int random_num = dis(gen);
+        
+        // 格式：YYYYMMDDHHMISS + 5位随机数（总共19位）
+        char serial[64]; // 增大缓冲区以满足编译器要求
+        snprintf(serial, sizeof(serial), "%04d%02d%02d%02d%02d%02d%05d",
+                tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+                tm.tm_hour, tm.tm_min, tm.tm_sec, static_cast<unsigned int>(random_num) % 100000U);
+        
+        ESP_LOGI("XiangLaoHui", "Generated serial number: %s", serial);
+        return std::string(serial);
+    }
+
+    // 计算SHA-256哈希值：流水号#手机号#域名
+    std::string CalculateNonce(const std::string& serial_number,
+                              const std::string& mobile_phone, 
+                              const std::string& domain) {
+        // 拼接格式：流水号#手机号#域名 (使用#作为分隔符)
+        std::string combined = serial_number + "#" + mobile_phone + "#" + domain;
+        
+        ESP_LOGI("XiangLaoHui", "Nonce input: %s", combined.c_str());
+        
+        unsigned char hash[32];
+        mbedtls_md_context_t ctx;
+        mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+        
+        mbedtls_md_init(&ctx);
+        mbedtls_md_setup(&ctx, mbedtls_md_info_from_type(md_type), 0);
+        mbedtls_md_starts(&ctx);
+        mbedtls_md_update(&ctx, (const unsigned char*)combined.c_str(), combined.length());
+        mbedtls_md_finish(&ctx, hash);
+        mbedtls_md_free(&ctx);
+        
+        // 转换为16进制字符串（64位小写）
+        std::stringstream ss;
+        for (int i = 0; i < 32; i++) {
+            ss << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
+        }
+        
+        std::string result = ss.str();
+        ESP_LOGI("XiangLaoHui", "Nonce result: %s", result.c_str());
+        return result;
+    }
+
+    // 实现一个函数来控制安卓播
+    // 查询享老汇健康数据
+    std::string QueryXiangLaoHuiHealthData(const std::string &mobile_phone)
+    {
+        ESP_LOGI("XiangLaoHui", "Querying health data for mobile: %s", mobile_phone.c_str());
+
+        // 生成流水号和nonce_str
+        std::string serial_number = GenerateSerialNumber();
+        std::string nonce_str = CalculateNonce(serial_number, mobile_phone, XIANGLAO_DOMAIN);
+
+        ESP_LOGI("XiangLaoHui", "Serial number: %s", serial_number.c_str());
+        ESP_LOGI("XiangLaoHui", "Nonce string: %s", nonce_str.c_str());
+
+        // 构建请求JSON - 严格按照API规范
+        cJSON *request_json = cJSON_CreateObject();
+        cJSON_AddStringToObject(request_json, "serial_number", serial_number.c_str());
+        cJSON_AddStringToObject(request_json, "mobile_phone", mobile_phone.c_str());
+        cJSON_AddStringToObject(request_json, "nonce_str", nonce_str.c_str());
+
+        char *json_string = cJSON_Print(request_json);
+        std::string request_body(json_string);
+        free(json_string);
+        cJSON_Delete(request_json);
+
+        ESP_LOGI("XiangLaoHui", "Request body: %s", request_body.c_str());
+
+        // 发送HTTP POST请求
+        esp_http_client_config_t config = {};
+        config.url = XIANGLAO_API_URL;
+        config.method = HTTP_METHOD_POST;
+        config.timeout_ms = 15000;
+        config.skip_cert_common_name_check = false;  // 启用证书域名检查
+        config.crt_bundle_attach = esp_crt_bundle_attach;  // 使用证书包
+        config.is_async = false;
+        config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+        
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_http_client_set_header(client, "Content-Type", "application/json;charset=utf-8");
+        esp_http_client_set_header(client, "User-Agent", "ESP32-XiangLaoHui/1.0");  // 添加User-Agent
+        esp_http_client_set_post_field(client, request_body.c_str(), request_body.length());
+        
+        // 首先开始请求，但不等待完成
+        esp_err_t err = esp_http_client_open(client, request_body.length());
+        if (err != ESP_OK) {
+            ESP_LOGE("XiangLaoHui", "Failed to open HTTP connection: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+            return "HTTP connection failed";
+        }
+        
+        // 写入请求体
+        int write_len = esp_http_client_write(client, request_body.c_str(), request_body.length());
+        if (write_len < 0) {
+            ESP_LOGE("XiangLaoHui", "Failed to write request body");
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+            return "Failed to send request";
+        }
+        
+        ESP_LOGI("XiangLaoHui", "Request body written: %d bytes", write_len);
+        
+        // 获取响应头
+        int content_length = esp_http_client_fetch_headers(client);
+        int status_code = esp_http_client_get_status_code(client);
+        ESP_LOGI("XiangLaoHui", "HTTP Status: %d", status_code);
+        ESP_LOGI("XiangLaoHui", "Content length: %d", content_length);
+        
+        std::string response;
+        
+        if (status_code == 200) {
+            // 读取响应数据
+            if (content_length > 0) {
+                // 已知内容长度
+                char* buffer = new char[content_length + 1];
+                int read_len = esp_http_client_read(client, buffer, content_length);
+                if (read_len > 0) {
+                    buffer[read_len] = '\0';
+                    response.assign(buffer, read_len);
+                    ESP_LOGI("XiangLaoHui", "Response read successfully, length: %d", read_len);
+                    ESP_LOGI("XiangLaoHui", "Response: %s", response.c_str());
+                } else {
+                    ESP_LOGE("XiangLaoHui", "Failed to read response data, read_len: %d", read_len);
+                }
+                delete[] buffer;
+            } else {
+                // 未知内容长度或分块传输
+                ESP_LOGW("XiangLaoHui", "Content-Length unknown, reading in chunks");
+                const int CHUNK_SIZE = 512;  // 减小缓冲区大小以节省栈空间
+                char* buffer = new char[CHUNK_SIZE];  // 使用堆分配而不是栈分配
+                int total_read = 0;
+                while (true) {
+                    int read_len = esp_http_client_read(client, buffer, CHUNK_SIZE - 1);
+                    if (read_len <= 0) {
+                        break;
+                    }
+                    buffer[read_len] = '\0';
+                    response.append(buffer, read_len);
+                    total_read += read_len;
+                    ESP_LOGI("XiangLaoHui", "Read chunk: %d bytes, total: %d", read_len, total_read);
+                }
+                delete[] buffer;  // 释放堆内存
+                ESP_LOGI("XiangLaoHui", "Total response read: %d bytes", total_read);
+                ESP_LOGI("XiangLaoHui", "Response: %s", response.c_str());
+            }
+        } else {
+            ESP_LOGE("XiangLaoHui", "HTTP request failed with status: %d", status_code);
+            // 构建错误响应
+            cJSON* error_json = cJSON_CreateObject();
+            cJSON_AddStringToObject(error_json, "return_code", "FAIL");
+            cJSON_AddStringToObject(error_json, "return_msg", "HTTP Error");
+            char* error_str = cJSON_Print(error_json);
+            response = std::string(error_str);
+            free(error_str);
+            cJSON_Delete(error_json);
+        }
+        
+        // 关闭连接并清理
+        esp_http_client_close(client);
+        
+        esp_http_client_cleanup(client);
+        return response;
+    }
+    // 获取 Home Assistant 某个实体的状态
+    std::string GetHomeAssistantState(const std::string &ha_url, const std::string &token, const std::string &entity_id)
+    {
+        std::string url = ha_url + "/api/states/" + entity_id;
+
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.method = HTTP_METHOD_GET;
+        config.timeout_ms = 10000;
+        config.crt_bundle_attach = esp_crt_bundle_attach;
+        config.transport_type = HTTP_TRANSPORT_OVER_SSL; // 如果是 https
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        std::string auth_header = "Bearer " + token;
+        esp_http_client_set_header(client, "Authorization", auth_header.c_str());
+        esp_http_client_set_header(client, "Content-Type", "application/json");
+
+        esp_err_t err = esp_http_client_open(client, 0);
+        if (err != ESP_OK)
+        {
+            esp_http_client_cleanup(client);
+            return "HTTP open failed";
+        }
+
+        int content_length = esp_http_client_fetch_headers(client);
+        int status_code = esp_http_client_get_status_code(client);
+
+        std::string response;
+        if (status_code == 200 && content_length > 0)
+        {
+            char *buffer = new char[content_length + 1];
+            int read_len = esp_http_client_read(client, buffer, content_length);
+            if (read_len > 0)
+            {
+                buffer[read_len] = '\0';
+                response.assign(buffer, read_len);
+            }
+            delete[] buffer;
+        }
+        else
+        {
+            response = "HTTP error: " + std::to_string(status_code);
+        }
+
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+        return response;
+    }
+
     void InitializeTools() {
         auto& mcp_server = McpServer::GetInstance();
+        // MCP方法统一包装器，支持失败返回值也显示表情
+        auto mcp_wrapper = [this](auto func) {
+            return [this, func](const PropertyList& properties) -> ReturnValue {
+                auto mcp_fail_count_ = 0;
+                try {
+                    auto result = func(properties);
+                    bool failed = false;
+                    // 针对常见类型判断失败
+                    if constexpr (std::is_same_v<decltype(result), bool>) {
+                        failed = !result;
+                    } else if constexpr (std::is_same_v<decltype(result), std::string>) {
+                        failed = result.empty() || result.find("❌") != std::string::npos;
+                    } else if constexpr (std::is_pointer_v<decltype(result)>) {
+                        failed = (result == nullptr);
+                    }
+                    if (failed) {
+                        mcp_fail_count_++;
+                        if (mcp_fail_count_ >= 3) {
+                            ShowAndroidEmoji("angry");
+                        } else {
+                            ShowAndroidEmoji("sad");
+                        }
+                    } else {
+                        mcp_fail_count_ = 0;
+                        ShowAndroidEmoji("smile");
+                    }
+                    return result;
+                } catch (const std::exception& e) {
+                    mcp_fail_count_++;
+                    if (mcp_fail_count_ >= 3) {
+                        ShowAndroidEmoji("angry");
+                    } else {
+                        ShowAndroidEmoji("sad");
+                    }
+                    throw;
+                }
+            };
+        };
         // 定义设备的属性
-        mcp_server.AddTool("self.chassis.get_light_mode", "获取灯光效果编号", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+        mcp_server.AddTool("self.chassis.get_light_mode", "获取灯光效果编号", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             if (light_mode_ < 2) {
                 return 1;
             } else {
                 return light_mode_ - 2;
             }
-        });
+        }));
 
-        mcp_server.AddTool("self.chassis.go_forward", "前进", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            // MCP tool: Reduce display brightness
+        mcp_server.AddTool("self.display.reduce_brightness", "降低屏幕亮度", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
+            auto backlight = GetBacklight();
+            if (backlight) {
+                backlight->SetBrightness(10, true); // Set brightness to 10 (example value)
+                ESP_LOGI(TAG, "屏幕亮度已降低");
+                return true;
+            } else {
+                ESP_LOGE(TAG, "Backlight 控制不可用");
+                return false;
+            }
+        }));
+
+        mcp_server.AddTool("self.chassis.go_forward", "前进", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("x0.0 y1.0");
             return true;
-        });
+        }));
 
-        mcp_server.AddTool("self.chassis.go_back", "后退", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+        mcp_server.AddTool("self.chassis.go_back", "后退", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("x0.0 y-1.0");
             return true;
-        });
+        }));
 
-        mcp_server.AddTool("self.chassis.turn_left", "向左转", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+        mcp_server.AddTool("self.chassis.turn_left", "向左转", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("x-1.0 y0.0");
             return true;
-        });
+        }));
 
-        mcp_server.AddTool("self.chassis.turn_right", "向右转", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+        mcp_server.AddTool("self.chassis.turn_right", "向右转", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("x1.0 y0.0");
             return true;
-        });
+        }));
         
-        mcp_server.AddTool("self.chassis.dance", "跳舞", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+        mcp_server.AddTool("self.chassis.dance", "跳舞", PropertyList(), mcp_wrapper([this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("d1");
             light_mode_ = LIGHT_MODE_MAX;
             return true;
+        }));
+        // AddTool("self.screen.set_theme",
+        //     "Set the theme of the screen. The theme can be `light` or `dark`.",
+        //     PropertyList({
+        //         Property("theme", kPropertyTypeString)
+        //     }),
+        //     [display](const PropertyList& properties) -> ReturnValue {
+        //         display->SetTheme(properties["theme"].value<std::string>().c_str());
+        //         return true;
+        //     });
+        // // 实现mcp方法给安卓发送http请求，请求格式http://192.168.2.240:8080?type=llm&text=文本
+        // 将 text 参数做成表情的枚举，只允许传入几个固定的表情类型
+        // 允许的表情类型: "smile", "sad", "angry", "surprised", "love"
+        mcp_server.AddTool("self.android.make_emoji", 
+            "做个表情，表情可以是: `smile`, `sad`, `angry`, `surprised`, `love`", PropertyList({
+            Property("emoji", kPropertyTypeString)
+        }), [this](const PropertyList& properties) -> ReturnValue {
+            static const std::set<std::string> allowed_emojis = {
+            "smile", "sad", "angry", "surprised", "love"
+            };
+            std::string emoji = properties["emoji"].value<std::string>();
+            if (allowed_emojis.find(emoji) == allowed_emojis.end()) {
+            throw std::runtime_error("不支持的表情类型，只能是: smile, sad, angry, surprised, love");
+            }
+            ShowAndroidEmoji(emoji);
+            return "已发送表情: " + emoji;
+        });
+        // 享老汇健康数据查询工具,硬编码账户信息
+        mcp_server.AddTool("self.health.query_elder_health_data", "查询老人健康数据", PropertyList({
+            Property("mobile_phone", kPropertyTypeString)
+        }), [this](const PropertyList& properties) -> ReturnValue {
+            std::string mobile_phone = properties["mobile_phone"].value<std::string>();
+            if (mobile_phone.empty()) {
+                throw std::runtime_error("手机号不能为空");
+            }
+            
+            // 手机号格式验证
+            if (mobile_phone.length() != 11 || mobile_phone[0] != '1') {
+                throw std::runtime_error("手机号格式不正确，请输入11位手机号");
+            }
+            
+            std::string response = QueryXiangLaoHuiHealthData(mobile_phone);
+            
+            // 添加调试信息
+            ESP_LOGI("XiangLaoHui", "Response length: %d", response.length());
+            ESP_LOGI("XiangLaoHui", "Response first 100 chars: %.100s", response.c_str());
+            
+            // 检查响应是否为空
+            if (response.empty()) {
+                ESP_LOGE("XiangLaoHui", "Empty response received");
+                return std::string("❌ 服务器返回空响应");
+            }
+            
+            // 解析响应数据
+            cJSON* json = cJSON_Parse(response.c_str());
+            if (!json) {
+                ESP_LOGE("XiangLaoHui", "Failed to parse response JSON");
+                ESP_LOGE("XiangLaoHui", "cJSON error: %s", cJSON_GetErrorPtr());
+                ESP_LOGE("XiangLaoHui", "Raw response: %s", response.c_str());
+                return std::string("❌ 响应数据解析失败 - JSON格式错误");
+            }
+            
+            // 检查返回状态，API成功时没有return_code字段，直接解析数据
+            cJSON* serial_number = cJSON_GetObjectItem(json, "serial_number");
+            cJSON* mobile_phone_resp = cJSON_GetObjectItem(json, "mobile_phone");
+            
+            if (cJSON_IsString(serial_number) && cJSON_IsString(mobile_phone_resp)) {
+                // 成功获取健康数据，构建友好的摘要
+                std::string health_summary = "🏥 健康数据查询成功!\n\n";
+                health_summary += "📱 手机号: " + std::string(mobile_phone_resp->valuestring) + "\n";
+                health_summary += "📋 流水号: " + std::string(serial_number->valuestring) + "\n\n";
+                
+                // 解析各项健康数据
+                cJSON* heart_rate = cJSON_GetObjectItem(json, "heart_rate");
+                cJSON* blood_glucose = cJSON_GetObjectItem(json, "blood_glucose");
+                cJSON* oxygen_saturation = cJSON_GetObjectItem(json, "oxygen_saturation");
+                cJSON* body_temperature = cJSON_GetObjectItem(json, "body_temperature");
+                cJSON* blood_pressure = cJSON_GetObjectItem(json, "blood_pressure");
+                cJSON* response_time = cJSON_GetObjectItem(json, "response_time");
+                cJSON* return_code = cJSON_GetObjectItem(json, "return_code");
+                cJSON* return_msg = cJSON_GetObjectItem(json, "return_msg");
+                
+                //尽可能简洁的总结health_summary
+                if (cJSON_IsString(heart_rate)) {
+                    health_summary += "心率: " + std::string(heart_rate->valuestring) + " bpm ";
+                }
+                if (cJSON_IsString(blood_pressure)) {
+                    health_summary += "血压: " + std::string(blood_pressure->valuestring) + " mmHg ";
+                }
+                if (cJSON_IsString(oxygen_saturation)) {
+                    health_summary += "血氧: " + std::string(oxygen_saturation->valuestring) + "% ";
+                }
+                if (cJSON_IsString(body_temperature)) {
+                    health_summary += "体温: " + std::string(body_temperature->valuestring) + "°C ";
+                }
+                if (cJSON_IsString(blood_glucose)) {
+                    health_summary += "血糖: " + std::string(blood_glucose->valuestring) + " mg/dL ";
+                }
+                if (cJSON_IsString(return_code)) {
+                    health_summary += "状态: " + std::string(return_code->valuestring) + " ";
+                }
+                if (cJSON_IsString(return_msg)) {
+                    health_summary += "(" + std::string(return_msg->valuestring) + ")";
+                }
+                if (cJSON_IsString(response_time)) {
+                    health_summary += " 时间: " + std::string(response_time->valuestring);
+                }
+                
+                cJSON_Delete(json);
+                ESP_LOGI("XiangLaoHui", "Health data retrieved successfully for: %s", mobile_phone.c_str());
+                return health_summary;
+            } else {
+                // 数据格式不正确或解析失败
+                std::string error_msg = "❌ 数据格式解析失败";
+                
+                // 尝试检查是否有错误信息
+                cJSON* return_code = cJSON_GetObjectItem(json, "return_code");
+                cJSON* return_msg = cJSON_GetObjectItem(json, "return_msg");
+                
+                if (cJSON_IsString(return_code)) {
+                    error_msg += "\n状态码: " + std::string(return_code->valuestring);
+                }
+                if (cJSON_IsString(return_msg)) {
+                    error_msg += "\n错误信息: " + std::string(return_msg->valuestring);
+                }
+                
+                cJSON_Delete(json);
+                ESP_LOGE("XiangLaoHui", "Health data parsing failed: %s", error_msg.c_str());
+                return error_msg;
+            }
         });
 
         mcp_server.AddTool("self.chassis.switch_light_mode", "打开灯光效果", PropertyList({
@@ -256,6 +771,198 @@ private:
             settings.SetInt("camera-flipped", flipped ? 1 : 0);
             
             return true;
+        });
+        // Home Assistant 客厅温度获取工具
+        // 工具名: self.homeassistant.get_living_room_temperature
+        // 功能: 通过 Home Assistant API 获取客厅温度传感器的当前温度值。
+        // 参数: 无（entity_id 和 token 在代码中占位，需后续替换）
+        // 返回: 温度数值字符串（如 "25.3"），便于大语言模型处理
+        mcp_server.AddTool("self.homeassistant.get_living_room_temperature", "获取客厅温度", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
+            std::string entity_id = "sensor.miaomiaoc_cn_blt_3_1m2cf17fcck00_t9_temperature_p_3_1001"; // 客厅温度传感器实体ID（占位）
+
+            std::string response = GetHomeAssistantState(ha_url, token, entity_id);
+
+            // 解析温度值（假设返回JSON格式，属性为 state）
+            cJSON* json = cJSON_Parse(response.c_str());
+            if (!json) {
+                return std::string(""); // 解析失败返回空字符串
+            }
+            cJSON* state = cJSON_GetObjectItem(json, "state");
+            std::string result;
+            if (cJSON_IsString(state)) {
+                result = std::string(state->valuestring); // 只返回数值
+            } else {
+                result = std::string(""); // 未获取到温度值返回空字符串
+            }
+            cJSON_Delete(json);
+            return result;
+        });
+
+        // Home Assistant 客厅湿度获取工具
+        // 工具名: self.homeassistant.get_living_room_humidity
+        // 功能: 通过 Home Assistant API 获取客厅湿度传感器的当前湿度值。
+        // 参数: 无（entity_id 和 token 在代码中占位，需后续替换）
+        // 返回: 湿度数值字符串（如 "45.2"），便于大语言模型处理
+        mcp_server.AddTool("self.homeassistant.get_living_room_humidity", "获取客厅湿度", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
+            std::string entity_id = "sensor.miaomiaoc_cn_blt_3_1m2cf17fcck00_t9_relative_humidity_p_3_1002"; // 客厅湿度传感器实体ID（占位）
+
+            std::string response = GetHomeAssistantState(ha_url, token, entity_id);
+
+            // 解析湿度值（假设返回JSON格式，属性为 state）
+            cJSON* json = cJSON_Parse(response.c_str());
+            if (!json) {
+                return std::string(""); // 解析失败返回空字符串
+            }
+            cJSON* state = cJSON_GetObjectItem(json, "state");
+            std::string result;
+            if (cJSON_IsString(state)) {
+                result = std::string(state->valuestring); // 只返回数值
+            } else {
+                result = std::string(""); // 未获取到湿度值返回空字符串
+            }
+            cJSON_Delete(json);
+            return result;
+        });
+
+        // Home Assistant 关闭客厅灯工具
+        // 工具名: self.homeassistant.turn_off_living_room_light
+        // 功能: 通过 Home Assistant API 关闭客厅灯（light.living_room），无需参数。
+        // 返回: 操作结果字符串（如成功/失败/错误信息）
+        mcp_server.AddTool("self.homeassistant.turn_off_living_room_light", "关闭客厅灯", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
+            std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
+
+            std::string service_url = ha_url + "/api/services/light/turn_off";
+            std::string request_body = std::string("{\"entity_id\": \"") + entity_id + "\"}";
+
+            esp_http_client_config_t config = {};
+            config.url = service_url.c_str();
+            config.method = HTTP_METHOD_POST;
+            config.timeout_ms = 10000;
+            config.crt_bundle_attach = esp_crt_bundle_attach;
+            config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            std::string auth_header = "Bearer " + token;
+            esp_http_client_set_header(client, "Authorization", auth_header.c_str());
+            esp_http_client_set_header(client, "Content-Type", "application/json");
+            esp_http_client_set_post_field(client, request_body.c_str(), request_body.length());
+
+            esp_err_t err = esp_http_client_open(client, request_body.length());
+            if (err != ESP_OK) {
+                esp_http_client_cleanup(client);
+                return std::string("❌ 无法连接 Home Assistant: ") + esp_err_to_name(err);
+            }
+
+            int write_len = esp_http_client_write(client, request_body.c_str(), request_body.length());
+            if (write_len < 0) {
+                esp_http_client_close(client);
+                esp_http_client_cleanup(client);
+                return std::string("❌ 请求发送失败");
+            }
+
+            int status_code = esp_http_client_get_status_code(client);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+
+            return std::string("✅ 客厅灯已关闭");
+
+        });
+        // Home Assistant 打开客厅灯工具
+        // 工具名: self.homeassistant.turn_on_living_room_light
+        // 功能: 通过 Home Assistant API 打开客厅灯（light.living_room），无需参数。
+        // 返回: 操作结果字符串（如成功/失败/错误信息）
+        mcp_server.AddTool("self.homeassistant.turn_on_living_room_light", "打开客厅灯", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
+            std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
+
+            std::string service_url = ha_url + "/api/services/light/turn_on";
+            std::string request_body = std::string("{\"entity_id\": \"") + entity_id + "\"}";
+
+            esp_http_client_config_t config = {};
+            config.url = service_url.c_str();
+            config.method = HTTP_METHOD_POST;
+            config.timeout_ms = 10000;
+            config.crt_bundle_attach = esp_crt_bundle_attach;
+            config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            std::string auth_header = "Bearer " + token;
+            esp_http_client_set_header(client, "Authorization", auth_header.c_str());
+            esp_http_client_set_header(client, "Content-Type", "application/json");
+            esp_http_client_set_post_field(client, request_body.c_str(), request_body.length());
+
+            esp_err_t err = esp_http_client_open(client, request_body.length());
+            if (err != ESP_OK) {
+                esp_http_client_cleanup(client);
+                return std::string("❌ 无法连接 Home Assistant: ") + esp_err_to_name(err);
+            }
+
+            int write_len = esp_http_client_write(client, request_body.c_str(), request_body.length());
+            if (write_len < 0) {
+                esp_http_client_close(client);
+                esp_http_client_cleanup(client);
+                return std::string("❌ 请求发送失败");
+            }
+
+            int status_code = esp_http_client_get_status_code(client);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+
+            return std::string("✅ 客厅灯已打开");
+        });
+        // MCP tool: Adjust Home Assistant light brightness
+        mcp_server.AddTool("self.homeassistant.set_living_room_light_brightness", "设置客厅灯亮度", PropertyList({
+            Property("brightness", kPropertyTypeInteger, 0, 255)
+        }), [this](const PropertyList& properties) -> ReturnValue {
+            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
+            std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
+
+            int brightness = properties["brightness"].value<int>();
+            std::string service_url = ha_url + "/api/services/light/turn_on";
+            std::stringstream request_body;
+            request_body << "{\"entity_id\": \"" << entity_id << "\", \"brightness\": " << brightness << "}";
+
+            esp_http_client_config_t config = {};
+            config.url = service_url.c_str();
+            config.method = HTTP_METHOD_POST;
+            config.timeout_ms = 10000;
+            config.crt_bundle_attach = esp_crt_bundle_attach;
+            config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            std::string auth_header = "Bearer " + token;
+            esp_http_client_set_header(client, "Authorization", auth_header.c_str());
+            esp_http_client_set_header(client, "Content-Type", "application/json");
+            std::string body_str = request_body.str();
+            esp_http_client_set_post_field(client, body_str.c_str(), body_str.length());
+
+            esp_err_t err = esp_http_client_open(client, body_str.length());
+            if (err != ESP_OK) {
+                esp_http_client_cleanup(client);
+                return std::string("❌ 无法连接 Home Assistant: ") + esp_err_to_name(err);
+            }
+
+            int write_len = esp_http_client_write(client, body_str.c_str(), body_str.length());
+            if (write_len < 0) {
+                esp_http_client_close(client);
+                esp_http_client_cleanup(client);
+                return std::string("❌ 请求发送失败");
+            }
+
+            int status_code = esp_http_client_get_status_code(client);
+            esp_http_client_close(client);
+            esp_http_client_cleanup(client);
+
+            return std::string("✅ 客厅灯亮度已设置为: ") + std::to_string(brightness);
+
         });
     }
 

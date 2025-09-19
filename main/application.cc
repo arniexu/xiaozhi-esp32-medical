@@ -1,3 +1,11 @@
+// ESP-IDF JPEG encoder integration
+#include <esp_err.h>
+#include <vector>
+// 使用 ESP-IDF driver/jpeg_encode.h API
+#include <esp_log.h>
+#include <esp_err.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "application.h"
 #include "board.h"
 #include "display.h"
