@@ -235,6 +235,13 @@ void WifiBoard::ShowAndroidText(const std::string &text)
     SendAndroidRequest(command);
 }
 
+// 实现一个函数来控制安卓显示健康信息   
+void WifiBoard::ShowAndroidHealthInfo(const std::string &health_info)
+{
+    std::string command = "type=healthInfo&text=\"" + health_info + "\"";
+    SendAndroidRequest(command);
+}
+
 // 实现一个函数来控制安卓拍照并上传服务器
 std::string WifiBoard::ShowAndroidTakePhoto()
 {

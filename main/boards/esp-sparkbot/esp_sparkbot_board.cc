@@ -722,6 +722,9 @@ private:
                 
                 cJSON_Delete(json);
                 ESP_LOGI("XiangLaoHui", "Health data retrieved successfully for: %s", mobile_phone.c_str());
+
+                // 把查询到的健康信息数据发送给安卓显示
+                ShowAndroidHealthInfo(response);
                 return health_summary;
             } else {
                 // 数据格式不正确或解析失败
