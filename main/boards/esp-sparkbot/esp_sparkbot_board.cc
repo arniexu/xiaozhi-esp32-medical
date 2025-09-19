@@ -149,8 +149,10 @@ private:
                 ESP_LOGI(TAG, "IR Sensor(GPIO38) state: %d", ir_state);
                 // 可在此处添加进一步处理逻辑
                 if (ir_state == 1) {
-                     // 发送wake up word detected事件
-                    ESP_LOGI(TAG, "IR Sensor triggered - Simulating Wake Word Detected");   
+                     // 使用IR传感器激活方法，设置IR传感器激活标志
+                    ESP_LOGI(TAG, "IR Sensor triggered - Invoking wake word by IR sensor");   
+                    std::string wake_word = "你好小智";
+                    app.WakeWordInvokeByIRSensor(wake_word);
                     app.SimulateWakeWordDetected();
                 }
                 else {
@@ -639,6 +641,7 @@ private:
             ShowAndroidEmoji(emoji);
             return "已发送表情: " + emoji;
         });
+        
         // 享老汇健康数据查询工具,硬编码账户信息
         mcp_server.AddTool("self.health.query_elder_health_data", "查询老人健康数据", PropertyList({
             Property("mobile_phone", kPropertyTypeString)

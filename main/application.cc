@@ -640,8 +640,20 @@ void Application::OnWakeWordDetected() {
             }
         }
 
-        auto wake_word = audio_service_.GetLastWakeWord();
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        auto wake_word = std::string();
+        if (IsIRSensorActivated())
+        {
+            wake_word = "你好小智";
+            // Set the chat state to wake word detected
+            protocol_->SendWakeWordDetected(wake_word);
+            ESP_LOGI(TAG, "Wake word simulated: %s", wake_word.c_str());
+            SetIRSensorActivated(false);
+        }
+        else
+        {
+            wake_word = audio_service_.GetLastWakeWord();
+            ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        }
 #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -695,6 +707,8 @@ void Application::SetDeviceState(DeviceState state) {
     switch (state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            // Reset IR sensor activation flag when returning to idle state
+            activated_by_ir_sensor_ = false;
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
             audio_service_.EnableVoiceProcessing(false);
@@ -822,6 +836,17 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             }
         });
     }
+}
+
+void Application::WakeWordInvokeByIRSensor(const std::string& wake_word) {
+    // Set the IR sensor activation flag
+    SetIRSensorActivated(true);
+    
+    // Log the IR sensor activation
+    ESP_LOGI("Application", "Wake word invoked by IR sensor: %s", wake_word.c_str());
+    
+    // // Call the original wake word invoke method
+    // WakeWordInvoke(wake_word);
 }
 
 bool Application::CanEnterSleepMode() {

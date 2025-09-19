@@ -63,6 +63,12 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
+    
+    // IR sensor activation methods
+    bool IsIRSensorActivated() const { return activated_by_ir_sensor_; }
+    void SetIRSensorActivated(bool activated) { activated_by_ir_sensor_ = activated; }
+    void WakeWordInvokeByIRSensor(const std::string& wake_word);
+    
     // 模拟唤醒词检测事件
     void SimulateWakeWordDetected();
 private:
@@ -82,6 +88,7 @@ private:
 
     bool has_server_time_ = false;
     bool aborted_ = false;
+    bool activated_by_ir_sensor_ = false;  // Flag to indicate if activated by IR sensor
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
