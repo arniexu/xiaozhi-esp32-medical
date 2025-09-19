@@ -177,8 +177,8 @@ void WifiBoard::ResetWifiConfiguration() {
 // 发送 GET 请求到指定 URL，返回响应内容
 std::string WifiBoard::SendAndroidRequest(const std::string &text)
 {
-    char url[256];
-    snprintf(url, sizeof(url), "http://192.168.2.120:8080?%s", text.c_str());
+    char url[512] = {0};
+    snprintf(url, sizeof(url), "http://192.168.43.245:8080?%s", text.c_str());
 
     esp_http_client_config_t config = {};
     config.url = url;
