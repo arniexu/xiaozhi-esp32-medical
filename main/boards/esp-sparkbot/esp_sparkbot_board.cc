@@ -125,51 +125,51 @@ private:
             ESP_LOGE(TAG, "❌ Storage write test failed");
         }
     }
-    // // 初始化红外传感器GPIO35
-    // void initializeIRSensor() {
-    //     // 配置 GPIO35 为输入模式
-    //     gpio_config_t io_conf = {};
-    //     io_conf.intr_type = GPIO_INTR_DISABLE;
-    //     io_conf.mode = GPIO_MODE_INPUT;
-    //     io_conf.pin_bit_mask = (1ULL << 35);
-    //     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    //     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    //     gpio_config(&io_conf);
+    // 初始化红外传感器GPIO38
+    void initializeIRSensor() {
+        // 配置 GPIO38 为输入模式
+        gpio_config_t io_conf = {};
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        io_conf.mode = GPIO_MODE_INPUT;
+        io_conf.pin_bit_mask = (1ULL << 38);
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        gpio_config(&io_conf);
 
-    //     // 任务1 使用红外传感器主动触发小智使其进入激活状态，播放提示音，进行人脸识别，主动向用户打招呼
-    //     // 任务1 步骤1 创建定时器，周期性轮询红外传感器状态
-    //     const esp_timer_create_args_t timer_args = {
-    //         .callback = [](void* arg) {
-    //             auto& app = Application::GetInstance();
-    //             int ir_state = gpio_get_level((gpio_num_t)38);
-    //             // 如果当前设备已经被激活，则不处理红外传感器事件
-    //             if (app.GetDeviceState() == kDeviceStateActivating) {
-    //                 return;
-    //             }
-    //             ESP_LOGI(TAG, "IR Sensor(GPIO38) state: %d", ir_state);
-    //             // 可在此处添加进一步处理逻辑
-    //             if (ir_state == 0) {
-    //                  // 发送wake up word detected事件
-    //                 ESP_LOGI(TAG, "IR Sensor triggered - Simulating Wake Word Detected");   
-    //                 app.SimulateWakeWordDetected();
-    //             }
-    //             else {
-    //                 ESP_LOGI(TAG, "IR Sensor not triggered");
-    //                 // 没有action，不使用红外决定是否退出activating模式
-    //             }
-    //         },
-    //         .arg = nullptr,
-    //         .name = "ir_sensor_poll"
-    //     };
-    //     esp_timer_handle_t timer_handle;
-    //     // 获取 Application 实例并作为 arg 传递
-    //     auto& app = Application::GetInstance();
-    //     esp_timer_create_args_t timer_args_with_arg = timer_args;
-    //     timer_args_with_arg.arg = &app;
-    //     esp_timer_create(&timer_args_with_arg, &timer_handle);
-    //     // 每500ms轮询一次
-    //     esp_timer_start_periodic(timer_handle, 500 * 1000);
-    // }
+        // 任务1 使用红外传感器主动触发小智使其进入激活状态，播放提示音，进行人脸识别，主动向用户打招呼
+        // 任务1 步骤1 创建定时器，周期性轮询红外传感器状态
+        const esp_timer_create_args_t timer_args = {
+            .callback = [](void* arg) {
+                auto& app = Application::GetInstance();
+                int ir_state = gpio_get_level((gpio_num_t)38);
+                // 如果当前设备已经被激活，则不处理红外传感器事件
+                if (app.GetDeviceState() != kDeviceStateIdle) {
+                    return;
+                }
+                ESP_LOGI(TAG, "IR Sensor(GPIO38) state: %d", ir_state);
+                // 可在此处添加进一步处理逻辑
+                if (ir_state == 1) {
+                     // 发送wake up word detected事件
+                    ESP_LOGI(TAG, "IR Sensor triggered - Simulating Wake Word Detected");   
+                    app.SimulateWakeWordDetected();
+                }
+                else {
+                    ESP_LOGI(TAG, "IR Sensor not triggered");
+                    // 没有action，不使用红外决定是否退出activating模式
+                }
+            },
+            .arg = nullptr,
+            .name = "ir_sensor_poll"
+        };
+        esp_timer_handle_t timer_handle;
+        // 获取 Application 实例并作为 arg 传递
+        auto& app = Application::GetInstance();
+        esp_timer_create_args_t timer_args_with_arg = timer_args;
+        timer_args_with_arg.arg = &app;
+        esp_timer_create(&timer_args_with_arg, &timer_handle);
+        // 每500ms轮询一次
+        esp_timer_start_periodic(timer_handle, 500 * 1000);
+    }
     
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -975,6 +975,7 @@ public:
     EspSparkBot() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
         InitializeSpi();
+        initializeIRSensor();
         InitializeDisplay();
         InitializeButtons();
         InitializeCamera();

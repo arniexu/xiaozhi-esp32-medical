@@ -63,7 +63,8 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
-
+    // 模拟唤醒词检测事件
+    void SimulateWakeWordDetected();
 private:
     Application();
     ~Application();

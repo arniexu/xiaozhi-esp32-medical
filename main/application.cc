@@ -353,6 +353,10 @@ void Application::StopListening() {
     });
 }
 
+// 模拟唤醒词检测事件
+void Application::SimulateWakeWordDetected() {
+    xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
+}
 void Application::Start() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
