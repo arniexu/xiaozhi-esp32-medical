@@ -783,7 +783,7 @@ private:
         // 参数: 无（entity_id 和 token 在代码中占位，需后续替换）
         // 返回: 温度数值字符串（如 "25.3"），便于大语言模型处理
         mcp_server.AddTool("self.homeassistant.get_living_room_temperature", "获取客厅温度", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string ha_url = "http://192.168.43.232:8123"; // Home Assistant 地址（占位）
             std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
             std::string entity_id = "sensor.miaomiaoc_cn_blt_3_1m2cf17fcck00_t9_temperature_p_3_1001"; // 客厅温度传感器实体ID（占位）
 
@@ -811,7 +811,7 @@ private:
         // 参数: 无（entity_id 和 token 在代码中占位，需后续替换）
         // 返回: 湿度数值字符串（如 "45.2"），便于大语言模型处理
         mcp_server.AddTool("self.homeassistant.get_living_room_humidity", "获取客厅湿度", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string ha_url = "http://192.168.43.232:8123"; // Home Assistant 地址（占位）
             std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
             std::string entity_id = "sensor.miaomiaoc_cn_blt_3_1m2cf17fcck00_t9_relative_humidity_p_3_1002"; // 客厅湿度传感器实体ID（占位）
 
@@ -838,7 +838,7 @@ private:
         // 功能: 通过 Home Assistant API 关闭客厅灯（light.living_room），无需参数。
         // 返回: 操作结果字符串（如成功/失败/错误信息）
         mcp_server.AddTool("self.homeassistant.turn_off_living_room_light", "关闭客厅灯", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string ha_url = "http://192.168.43.232:8123"; // Home Assistant 地址（占位）
             std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
             std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
 
@@ -883,7 +883,7 @@ private:
         // 功能: 通过 Home Assistant API 打开客厅灯（light.living_room），无需参数。
         // 返回: 操作结果字符串（如成功/失败/错误信息）
         mcp_server.AddTool("self.homeassistant.turn_on_living_room_light", "打开客厅灯", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string ha_url = "http://192.168.43.232:8123"; // Home Assistant 地址（占位）
             std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
             std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
 
@@ -926,7 +926,7 @@ private:
         mcp_server.AddTool("self.homeassistant.set_living_room_light_brightness", "设置客厅灯亮度", PropertyList({
             Property("brightness", kPropertyTypeInteger, 0, 255)
         }), [this](const PropertyList& properties) -> ReturnValue {
-            std::string ha_url = "http://192.168.100.143:8123"; // Home Assistant 地址（占位）
+            std::string ha_url = "http://192.168.43.232:8123"; // Home Assistant 地址（占位）
             std::string token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4Y2E1NzFlZjU0M2Y0ODlhODE2YmFmYTdjZmYyZjcwOSIsImlhdCI6MTc1NjAzODgxNSwiZXhwIjoyMDcxMzk4ODE1fQ.ggOgXgnu9atig_hK34ucsCP-9HLYrvNaqJFhFyRe_BI"; // Token（占位）
             std::string entity_id = "light.zhuow_cn_2022232388_wy0a02_s_2_light"; // 客厅灯实体ID（占位）
 
